@@ -50,6 +50,9 @@ class Obstacle:
     area: int
     distance: float  # dist_q percentile over the object
     gap_m: float  # lateral distance outside the corridor (0 = overlaps it)
+    x_m: float  # signed lateral position (median X of the mask; + = right)
+    x_lo: float  # lateral extent (10th / 90th percentile of X)
+    x_hi: float
     field: float  # w/w_max * exp(-d/lambda) * lateral fall-off
     corridor_px: int
     corridor_distance: float | None
@@ -161,7 +164,9 @@ def assess(cands: list[Candidate], depth: np.ndarray, cam: Camera, cfg: dict) ->
         if not core.any():
             core = c.mask
         dist, point = _robust(depth, core, dq)
-        gap = max(0.0, float(np.percentile(np.abs(x[core]), 10)) - hw)
+        xs = x[core]
+        gap = max(0.0, float(np.percentile(np.abs(xs), 10)) - hw)
+        x_lo, x_m, x_hi = (float(v) for v in np.percentile(xs, (10, 50, 90)))
         lateral = 1.0 if math.isinf(sigma) else math.exp(-gap * gap / (2 * sigma * sigma))
         grounded = c.mask.any(axis=1).nonzero()[0].max() >= ground_row  # lowest pixel below the horizon
         in_corr = core & corridor if grounded else np.zeros_like(core)
@@ -170,7 +175,7 @@ def assess(cands: list[Candidate], depth: np.ndarray, cam: Camera, cfg: dict) ->
         corr_d = None
         if n_corr >= min_px:
             corr_d, point = _robust(depth, in_corr, q)
-        obstacles.append(Obstacle(c.name, c.weight, c.box, int(c.mask.sum()), dist, gap,
+        obstacles.append(Obstacle(c.name, c.weight, c.box, int(c.mask.sum()), dist, gap, x_m, x_lo, x_hi,
                                   (c.weight / w_max) * math.exp(-dist / lam) * lateral, n_corr, corr_d, point))
 
     zd = depth[corr_obstacle]

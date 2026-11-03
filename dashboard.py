@@ -4,6 +4,7 @@ Shapes are drawn with OpenCV on an RGB canvas; text is queued and drawn in one P
 """
 from __future__ import annotations
 
+import math
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +23,11 @@ TITLE_BG = (24, 31, 39)
 TEXT = (214, 222, 230)
 DIM = (120, 134, 146)
 ACCENT = (64, 200, 222)
-LEVEL_RGB = {"NEAR": (236, 72, 64), "MID": (240, 168, 40), "FAR": (60, 200, 110), "CLEAR": (120, 134, 146)}
+LEVEL_RGB = {"NEAR": (236, 72, 64), "MID": (240, 168, 40), "FAR": (96, 150, 186), "CLEAR": (120, 134, 146)}  # FAR is neutral, never "safe green"
+# driver alert: colour + icon + word together
+ALERT_FILL = {"WARNING": (206, 40, 36), "CAUTION": (242, 168, 28), "CLEAR": (22, 29, 37)}
+ALERT_INK = {"WARNING": (255, 255, 255), "CAUTION": (24, 18, 6), "CLEAR": (214, 222, 230)}
+ALERT_MARK = {"WARNING": (236, 72, 64), "CAUTION": (240, 168, 40), "CLEAR": (176, 186, 196)}
 HEADER_H, GAP, TITLE_H = 34, 6, 24
 PALETTE = np.zeros((256, 3), np.uint8)  # class id -> RGB; IGNORE (255) and unused ids stay black
 PALETTE[:len(CITYSCAPES_RGB)] = CITYSCAPES_RGB
@@ -71,11 +76,17 @@ def object_distance(o) -> float:
 
 
 class Dashboard:
-    def __init__(self, width: int, height: int, risk_cfg: dict, history: int = 60):
-        self.w, self.h, self.cfg = width, height, risk_cfg
-        self.history: deque[tuple[float, str]] = deque(maxlen=history)
-        pw, ph = (width - 3 * GAP) // 2, (height - HEADER_H - 3 * GAP) // 2
-        self.panels = [(GAP + c * (pw + GAP), HEADER_H + GAP + r * (ph + GAP), pw, ph) for r in range(2) for c in range(2)]
+    def __init__(self, width: int, height: int, risk_cfg: dict, history: int = 60, view: str = "research", bev_range_m: float = 45.0):
+        """view: "research" (camera, segmentation, depth, driver alert) or "driver" (camera + driver alert only)."""
+        self.w, self.h, self.cfg, self.view, self.bev_range = width, height, risk_cfg, view, bev_range_m
+        self.history: deque[str] = deque(maxlen=history)
+        if view == "driver":
+            cw = int((width - 3 * GAP) * 0.64)
+            ph = height - HEADER_H - 2 * GAP
+            self.panels = [(GAP, HEADER_H + GAP, cw, ph), (2 * GAP + cw, HEADER_H + GAP, width - 3 * GAP - cw, ph)]
+        else:
+            pw, ph = (width - 3 * GAP) // 2, (height - HEADER_H - 3 * GAP) // 2
+            self.panels = [(GAP + c * (pw + GAP), HEADER_H + GAP + r * (ph + GAP), pw, ph) for r in range(2) for c in range(2)]
         self.texts: list[tuple] = []
 
     def zone_of(self, d: float) -> str:
@@ -99,6 +110,7 @@ class Dashboard:
 
     # ---- helpers ----------------------------------------------------------------------------------------------------
     def _panel_frame(self, canvas, i: int, title: str, subtitle: str):
+        """Draw panel i's frame and title bar; returns the content rect."""
         x, y, w, h = self.panels[i]
         cv2.rectangle(canvas, (x, y), (x + w - 1, y + h - 1), PANEL, -1)
         cv2.rectangle(canvas, (x, y), (x + w - 1, y + TITLE_H), TITLE_BG, -1)
@@ -132,7 +144,7 @@ class Dashboard:
                 cv2.line(canvas, (s, c) if horiz else (c, s), (e, c) if horiz else (c, e), color, 1, cv2.LINE_AA)
 
     # ---- panels -----------------------------------------------------------------------------------------------------
-    def _camera(self, canvas, rgb, dec: Decision, cam: Camera, depth_hw, info: Info):
+    def _camera(self, canvas, rgb, dec: Decision, cam: Camera, depth_hw, info: Info, alert):
         rect = self._panel_frame(canvas, 0, "CAMERA", "RISK ZONES + OBSTACLE DISTANCE")
         fx, fy, fw, fh = fit = self._fit(rect, *rgb.shape[:2])
         self._blit(canvas, rgb, fit)
@@ -170,12 +182,12 @@ class Dashboard:
             if fy < v < fy + fh and u - 40 > fx:
                 self.text(u - 6, v, f"{z:.0f} m", 12, TEXT, False, "rm")
 
-        # objects; the most critical one (selection rule) is highlighted in the colour of its distance zone
+        # objects; the one the alert is about is highlighted in the alert colour
         for o in sorted(dec.obstacles, key=lambda o: -o.distance):
             p0, p1 = to_disp(o.box[0], o.box[1]), to_disp(o.box[2], o.box[3])
-            is_top = dec.top is o
+            is_top = alert.obj is o
             if is_top:
-                col = LEVEL_RGB[self.zone_of(object_distance(o))]
+                col = ALERT_MARK[alert.state]
             elif o.corridor_distance is not None:
                 col = (200, 200, 200)
             else:
@@ -194,8 +206,11 @@ class Dashboard:
         if info.ref_boxes:
             self.text(int(fx + info.ref_boxes[0][0] * fw), int(fy + info.ref_boxes[0][3] * fh) + 2, "REF", 11, (255, 255, 255), True, "la", bg=(60, 60, 60))
 
-        badge = f"{dec.level}  {dec.distance:.1f} m" if dec.distance is not None else dec.level
-        self.text(rect[0] + 10, rect[1] + rect[3] - 10, badge, 16, (10, 14, 18), True, "lb", bg=LEVEL_RGB[dec.level])
+        badge = alert.state + (f"  {alert.obj.name} {alert.distance:.1f} m {alert.bearing.lower()}" if alert.obj is not None else "")
+        if alert.held_s is not None:
+            badge = f"{alert.state}  (holding, last {alert.obj.name} {alert.distance:.1f} m)"
+        self.text(rect[0] + 10, rect[1] + rect[3] - 10, badge, 18, ALERT_INK[alert.state], True, "lb",
+                  bg=ALERT_FILL[alert.state] if alert.state != "CLEAR" else (40, 48, 58))
 
     def _segmentation(self, canvas, rgb, class_map):
         rect = self._panel_frame(canvas, 1, "SEMANTIC SEGMENTATION", "SegFormer-B2 / Cityscapes")
@@ -215,7 +230,7 @@ class Dashboard:
             if lx > x + w - 60:
                 break
 
-    def _depth(self, canvas, depth, dec: Decision):
+    def _depth(self, canvas, depth, dec: Decision, alert):
         rect = self._panel_frame(canvas, 2, "METRIC DEPTH", "Depth Anything 3 (DA3METRIC-LARGE)")
         x, y, w, h = rect
         bar_w = 64
@@ -236,7 +251,7 @@ class Dashboard:
             cv2.line(canvas, (bx + 14, ty), (bx + 18, ty), TEXT, 1)
             self.text(bx + 21, ty, f"{t:.0f}", 11, TEXT, False, "lm")
 
-        n = dec.top
+        n = alert.obj if any(o is alert.obj for o in dec.obstacles) else None  # live objects only, never a held one
         if n is not None:
             px = int(fx + (n.point[0] + 0.5) * fw / depth.shape[1])
             py = int(fy + (n.point[1] + 0.5) * fh / depth.shape[0])
@@ -247,75 +262,176 @@ class Dashboard:
             lx = min(px + 12, fx + fw - 4 - int(font(12, True).getlength(label)))
             self.text(lx, max(py - 10, fy + 18), label, 12, (8, 20, 26), True, "lb", bg=ACCENT)
 
-    def _decision(self, canvas, dec: Decision, info: Info):
-        x, y, w, h = self._panel_frame(canvas, 3, "RISK DECISION", "late fusion")
-        c = self.cfg
-        col = LEVEL_RGB[dec.level]
-        # level box
-        bx, by, bw, bh = x + 14, y + 12, 236, 118
-        cv2.rectangle(canvas, (bx, by), (bx + bw, by + bh), tuple(int(v * 0.16) for v in col), -1)
-        cv2.rectangle(canvas, (bx, by), (bx + bw, by + bh), col, 2)
-        self.text(bx + 10, by + 10, "RISK LEVEL", 11, DIM)
-        self.text(bx + bw // 2, by + bh // 2 + 4, dec.level, 46, col, True, "mm")
-        ranges = {"NEAR": f"< {c['near_m']:.1f} m", "MID": f"{c['near_m']:.0f}-{c['mid_m']:.0f} m",
-                  "FAR": f"> {c['mid_m']:.1f} m", "CLEAR": "no obstacle in corridor"}
-        self.text(bx + 10, by + bh - 8, ranges[dec.level], 11, DIM, False, "lb")
+    # ---- driver alert panel -------------------------------------------------------------------------------------------
+    @staticmethod
+    def _icon(canvas, cx: int, cy: int, size: int, state: str) -> None:
+        """Warning triangle with '!' (WARNING, CAUTION) or a check in a circle (CLEAR)."""
+        ink, fill = ALERT_INK[state], ALERT_FILL[state]
+        if state == "CLEAR":
+            r = size // 2
+            cv2.circle(canvas, (cx, cy), r, ink, max(2, size // 14), cv2.LINE_AA)
+            pts = np.array([(cx - r * 0.45, cy + r * 0.02), (cx - r * 0.1, cy + r * 0.38), (cx + r * 0.5, cy - r * 0.35)], np.int32)
+            cv2.polylines(canvas, [pts], False, ink, max(2, size // 12), cv2.LINE_AA)
+            return
+        h = int(size * 0.9)
+        tri = np.array([(cx, cy - h // 2), (cx - size // 2, cy + h // 2), (cx + size // 2, cy + h // 2)], np.int32)
+        cv2.fillPoly(canvas, [tri], ink, cv2.LINE_AA)
+        bar_w = max(3, size // 9)
+        cv2.rectangle(canvas, (cx - bar_w // 2, cy - h // 5), (cx + bar_w // 2, cy + h // 6), fill, -1)
+        cv2.circle(canvas, (cx, cy + h // 3), max(2, bar_w // 2 + 1), fill, -1, cv2.LINE_AA)
 
-        # most critical object + score
-        rx, rw = bx + bw + 22, w - bw - 50
-        self.text(rx, by + 4, "MOST CRITICAL OBJECT" + ("  (in corridor)" if dec.top is not None and dec.top.corridor_distance is not None else ""), 11, DIM)
-        if dec.top is not None:
-            self.text(rx, by + 24, dec.top.name, 22, TEXT, True)
-            self.text(rx + 20 + int(font(22, True).getlength(dec.top.name)), by + 24, f"{object_distance(dec.top):.1f} m", 22, TEXT, True)
+    @staticmethod
+    def _arrow(canvas, cx: int, cy: int, size: int, bearing: str, color) -> None:
+        d = {"AHEAD": (0, -1), "LEFT": (-1, 0), "RIGHT": (1, 0), "AHEAD-LEFT": (-0.7, -0.7), "AHEAD-RIGHT": (0.7, -0.7)}.get(bearing)
+        if d is None:
+            return
+        p0 = (int(cx - d[0] * size / 2), int(cy - d[1] * size / 2))
+        p1 = (int(cx + d[0] * size / 2), int(cy + d[1] * size / 2))
+        cv2.arrowedLine(canvas, p0, p1, color, max(2, size // 8), cv2.LINE_AA, tipLength=0.45)
+
+    def _alert_card(self, canvas, rect, alert) -> None:
+        x, y, w, h = rect
+        st, ink = alert.state, ALERT_INK[alert.state]
+        cv2.rectangle(canvas, (x, y), (x + w, y + h), ALERT_FILL[st], -1)
+        cv2.rectangle(canvas, (x, y), (x + w, y + h), ALERT_MARK[st] if st == "CLEAR" else ink, 1)
+        s = min(w / 420, h / 250)  # type scale
+        icon = int(64 * s)
+        self._icon(canvas, x + int(18 * s) + icon // 2, y + int(16 * s) + icon // 2, icon, st)
+        self.text(x + int(30 * s) + icon, y + int(16 * s) + icon // 2, st, int(50 * s), ink, True, "lm")
+        sub = {"WARNING": "obstacle close in your path", "CAUTION": "obstacle in your path", "CLEAR": "no obstacle in your path"}[st]
+        if alert.raw_state != st:
+            sub += "  (holding)"
+        self.text(x + int(30 * s) + icon, y + int(16 * s) + icon + int(4 * s), sub, int(15 * s), ink, False, "la")
+
+        oy = y + int(16 * s) + icon + int(44 * s)
+        o = alert.obj
+        if o is None:
+            self.text(x + int(18 * s), oy + int(10 * s), "nothing detected", int(22 * s), ink, False)
+        elif st == "CLEAR":  # nothing to act on: nearby objects as a quiet info line, not headline numbers
+            tr = alert.trend
+            trend = "" if tr.closing_mps is None else (", approaching" if tr.closing_mps > 0 else ", moving away")
+            where = "ahead in lane" if o.corridor_distance is not None else alert.bearing.lower()
+            self.text(x + int(18 * s), oy + int(6 * s), "nearest road user", int(15 * s), DIM, False, "la")
+            self.text(x + int(18 * s), oy + int(30 * s), f"{o.name} {alert.distance:.1f} m {where}{trend}", int(22 * s), ink, True, "la")
+        elif alert.held_s is not None:  # hysteresis hold: the cause is no longer live, say so instead of showing stale numbers
+            self.text(x + int(18 * s), oy + int(6 * s), f"last seen {alert.held_s:.1f} s ago:", int(18 * s), ink, False, "la")
+            self.text(x + int(18 * s), oy + int(34 * s), f"{o.name} {alert.distance:.1f} m {alert.bearing.lower()}", int(26 * s), ink, True, "la")
         else:
-            self.text(rx, by + 24, "--", 22, DIM, True)
-        self.text(rx, by + 66, "RISK SCORE", 11, DIM)
-        self.text(rx + rw, by + 66, f"{dec.score:.2f}", 13, TEXT, True, "ra")
-        cv2.rectangle(canvas, (rx, by + 86), (rx + rw, by + 98), (30, 38, 46), -1)
-        cv2.rectangle(canvas, (rx, by + 86), (rx + int(rw * dec.score), by + 98), col, -1)
-        cv2.rectangle(canvas, (rx, by + 86), (rx + rw, by + 98), BORDER, 1)
+            num = f"{alert.distance:.1f}" if alert.distance < 100 else ">100"
+            self.text(x + int(18 * s), oy, num, int(58 * s), ink, True, "la")
+            ux = x + int(22 * s) + int(font(int(58 * s), True).getlength(num))
+            self.text(ux, oy + int(22 * s), "m", int(28 * s), ink, True, "la")
+            dx = ux + int(26 * s) + int(font(int(28 * s), True).getlength("m"))
+            self.text(dx, oy + int(6 * s), o.name.upper(), int(24 * s), ink, True, "la")
+            self._arrow(canvas, dx + int(12 * s), oy + int(50 * s), int(22 * s), alert.bearing, ink)
+            self.text(dx + int(30 * s), oy + int(50 * s), alert.bearing.replace("-", " "), int(18 * s), ink, True, "lm")
+            tr = alert.trend
+            if not tr.measured:
+                trend = "trend not yet measured"
+            elif tr.closing_mps is None:
+                trend = "steady"
+            elif tr.closing_mps > 0:
+                in_path = o.corridor_distance is not None  # TTC only for objects in the path; beside it, closing is just ego motion
+                trend = f"approaching {tr.closing_mps:.1f} m/s" + (f"   TTC {tr.ttc_s:.1f} s" if in_path and tr.ttc_s is not None and tr.ttc_s < 10 else "")
+            else:
+                trend = f"moving away {-tr.closing_mps:.1f} m/s"
+            self.text(x + int(18 * s), oy + int(84 * s), trend, int(18 * s), ink, False, "la")
+        if alert.watch is not None and alert.watch is not o:
+            wd = alert.watch.corridor_distance if alert.watch.corridor_distance is not None else alert.watch.distance
+            self.text(x + int(18 * s), y + h - int(12 * s), f"also watch: {alert.watch.name} {wd:.1f} m", int(15 * s), ink, False, "lb")
 
-        # zone bars
-        zy = by + bh + 18
-        self.text(x + 14, zy, "CORRIDOR OBSTACLE PIXELS BY ZONE", 11, DIM)
-        total = max(sum(z.px for z in dec.zones), 1)
-        bar_x0, bar_x1 = x + 140, x + w - 260
-        for i, z in enumerate(dec.zones):
-            ry = zy + 26 + i * 22
-            label = {"NEAR": f"NEAR  <{z.hi:.0f} m", "MID": f"MID   {z.lo:.0f}-{z.hi:.0f} m", "FAR": f"FAR   >{z.lo:.0f} m"}[z.name]
-            self.text(x + 14, ry, label, 12, LEVEL_RGB[z.name], False, "lm")
-            frac = z.px / total if dec.corridor_px else 0.0
-            cv2.rectangle(canvas, (bar_x0, ry - 6), (bar_x1, ry + 6), (30, 38, 46), -1)
-            if frac > 0:
-                cv2.rectangle(canvas, (bar_x0, ry - 6), (bar_x0 + int((bar_x1 - bar_x0) * frac), ry + 6), LEVEL_RGB[z.name], -1)
-            self.text(bar_x1 + 52, ry, f"{100 * frac:.1f}%", 12, TEXT, False, "rm")
-            self.text(bar_x1 + 120, ry, f"{z.px} px", 12, TEXT, False, "rm")
-            self.text(bar_x1 + 134, ry, f"min {z.min_m:.1f} m" if z.min_m is not None else "min --", 12, TEXT if z.min_m else DIM, False, "lm")
+    def _bev(self, canvas, rect, dec: Decision, cam: Camera, alert) -> None:
+        """Top view in metres: ego car at the bottom, corridor, range lines, camera field of view, objects at (X, Z)."""
+        x, y, w, h = rect
+        cv2.rectangle(canvas, (x, y), (x + w, y + h), (11, 14, 18), -1)
+        c, R = self.cfg, self.bev_range
+        ppm = (h - 8) / (R + 6.0)  # depth scale
+        xpm = min(w / 20.0, 3.0 * ppm)  # lateral scale: about +/-10 m across the panel (stretched, as ADAS top views usually are)
+        ox, oy = x + w // 2, y + h - 4 - int(6.0 * ppm)  # screen point of (X=0, Z=0): the ego front bumper
+        P = lambda X, Z: (int(round(ox + X * xpm)), int(round(oy - Z * ppm)))
+        roi = (slice(y, y + h), slice(x, x + w))
+        sub = canvas[roi].copy()
+        Q = lambda X, Z: (P(X, Z)[0] - x, P(X, Z)[1] - y)
 
-        # history
-        hy = zy + 26 + 3 * 22
-        self.text(x + 14, hy, f"RISK SCORE HISTORY (last {self.history.maxlen} frames)", 11, DIM)
-        gx0, gy0, gx1, gy1 = x + 14, hy + 18, x + w - 14, y + h - 66
-        cv2.rectangle(canvas, (gx0, gy0), (gx1, gy1), (17, 22, 28), -1)
-        cv2.rectangle(canvas, (gx0, gy0), (gx1, gy1), BORDER, 1)
-        for thr, name in ((c["near_m"], "NEAR"), (c["mid_m"], "MID")) if c["rule"] == "corridor" else ():
-            s = np.clip((c["mid_m"] - thr) / (c["mid_m"] - c["critical_m"]), 0, 1)
-            ty = int(gy1 - s * (gy1 - gy0 - 4)) - 2
-            for sx in range(gx0 + 2, gx1 - 2, 8):
-                cv2.line(canvas, (sx, ty), (min(sx + 3, gx1 - 2), ty), tuple(v // 3 for v in LEVEL_RGB[name]), 1)
-        n = self.history.maxlen
-        pts = [(int(gx1 - 4 - (len(self.history) - 1 - i) * (gx1 - gx0 - 8) / max(n - 1, 1)), int(gy1 - 2 - s * (gy1 - gy0 - 4)), lv)
-               for i, (s, lv) in enumerate(self.history)]
-        for (ax, ay, _), (cx_, cy_, lv) in zip(pts, pts[1:]):
-            cv2.line(canvas, (ax, ay), (cx_, cy_), (240, 168, 40), 1, cv2.LINE_AA)
-        for px, py, lv in pts:
-            cv2.circle(canvas, (px, py), 3, LEVEL_RGB[lv], -1, cv2.LINE_AA)
+        half_fov = math.atan(cam.cx / cam.f_px)
+        zf = R + 6
+        wedge = np.array([Q(0, 0), Q(-math.tan(half_fov) * zf, zf), Q(math.tan(half_fov) * zf, zf)], np.int32)
+        cv2.fillPoly(sub, [wedge], (17, 22, 28))
+        hw = c["corridor_half_width_m"]
+        overlay = sub.copy()
+        for name, z0, z1 in (("NEAR", 0, c["near_m"]), ("MID", c["near_m"], c["mid_m"]), ("FAR", c["mid_m"], R)):
+            cv2.rectangle(overlay, Q(-hw, z1), Q(hw, z0), LEVEL_RGB[name], -1)
+        sub = cv2.addWeighted(overlay, 0.22, sub, 0.78, 0)
+        for X in (-hw, hw):
+            cv2.line(sub, Q(X, 0), Q(X, R), (70, 82, 94), 1, cv2.LINE_AA)
+        for Z in (c["near_m"], c["mid_m"]):
+            a = Q(0, Z)
+            for sx in range(0, w, 10):
+                cv2.line(sub, (sx, a[1]), (sx + 5, a[1]), (58, 68, 80), 1)
+        canvas[roi] = sub
+        for Z in (c["near_m"], c["mid_m"], R):
+            self.text(x + w - 6, P(0, Z)[1] - 2, f"{Z:.0f} m", 12, DIM, False, "rb")
+        self.text(x + 8, y + 6, "TOP VIEW", 11, DIM, True)
 
-        t = info.timings
-        self.text(x + 14, y + h - 44, f"DA3 {t.get('depth', 0):.0f} ms   SegFormer {t.get('seg', 0):.0f} ms   fusion {t.get('fusion', 0):.0f} ms   "
-                                      f"render {t.get('render', 0):.0f} ms   pipeline {info.fps:.1f} FPS", 12, TEXT, False, "lb")
-        self.text(x + 14, y + h - 26, info.params + f"   corridor px={dec.corridor_px}", 12, DIM, False, "lb")
-        self.text(x + 14, y + h - 8, info.ref_text, 12, info.ref_color, False, "lb")
+        # ego vehicle
+        e0, e1 = P(-0.9, 0), P(0.9, -4.5)
+        cv2.rectangle(canvas, (e0[0], e0[1]), (e1[0], e1[1]), (196, 204, 212), -1, cv2.LINE_AA)
+        cv2.rectangle(canvas, P(-0.75, -1.2), P(0.75, -2.0), (40, 48, 58), -1)
+
+        size = {"person": (0.6, 0.6), "bicycle": (0.7, 1.8), "motorcycle": (0.8, 2.0), "car": (1.8, 4.5), "truck": (2.5, 8.0),
+                "bus": (2.6, 11.0), "train": (3.0, 15.0), "rider": (0.7, 1.8), "cat": (0.4, 0.6), "dog": (0.5, 0.9)}
+        for o in sorted(dec.obstacles, key=lambda o: o is alert.obj):
+            d = o.corridor_distance if o.corridor_distance is not None else o.distance
+            if d > R:
+                continue
+            ow, ol = size.get(o.name, (1.0, 1.0))
+            ow = max(ow, o.x_hi - o.x_lo) if o.name not in ("person", "cat", "dog") else ow
+            focus = o is alert.obj
+            col = ALERT_MARK[alert.state] if focus else ((150, 160, 170) if o.corridor_distance is not None else (88, 98, 110))
+            p0, p1 = P(o.x_m - ow / 2, d + min(ol, R - d)), P(o.x_m + ow / 2, d)
+            if o.name == "person":
+                cv2.circle(canvas, P(o.x_m, d + 0.3), max(5, int(0.4 * xpm)), col, -1, cv2.LINE_AA)
+            else:
+                cv2.rectangle(canvas, p0, p1, col, -1, cv2.LINE_AA)
+            if focus:
+                cv2.rectangle(canvas, (p0[0] - 3, p0[1] - 3), (p1[0] + 3, p1[1] + 3), (255, 255, 255), 1, cv2.LINE_AA)
+                label = f"{o.name} {d:.1f} m"
+                lx = min(max(p0[0], x + 4), x + w - 6 - int(font(13, True).getlength(label)))
+                self.text(lx, max(p0[1] - 6, y + 34), label, 13, TEXT, True, "lb", bg=(11, 14, 18))
+
+    def _timeline(self, canvas, rect) -> None:
+        x, y, w, h = rect
+        self.text(x, y, f"ALERT HISTORY  (last {self.history.maxlen} updates, newest right)", 11, DIM)
+        by, n = y + 16, self.history.maxlen
+        cw = (w - (n - 1)) / n
+        for i in range(n):
+            j = i - (n - len(self.history))
+            st = self.history[j] if j >= 0 else None
+            col = ALERT_MARK[st] if st in ("WARNING", "CAUTION") else ((52, 60, 70) if st else (24, 30, 37))
+            x0 = int(x + i * (cw + 1))
+            cv2.rectangle(canvas, (x0, by), (int(x0 + cw), by + h - 18), col, -1)
+
+    def _hud(self, canvas, i: int, dec: Decision, cam: Camera, alert, info: Info) -> None:
+        x, y, w, h = self._panel_frame(canvas, i, "DRIVER ALERT", "forward collision warning")
+        pad = 12
+        dev = self.view == "research"
+        if w > 1.4 * h:  # wide panel (research view): card + timeline left, top view right, dev lines below
+            body_h = h - (44 if dev else 0) - pad
+            lw = int(w * 0.54)
+            self._alert_card(canvas, (x + pad, y + pad, lw - pad, body_h - 52), alert)
+            self._timeline(canvas, (x + pad, y + pad + body_h - 42, lw - pad, 40))
+            self._bev(canvas, (x + lw + pad, y + pad, w - lw - 2 * pad, body_h), dec, cam, alert)
+        else:  # tall panel (driver view): card, top view, timeline
+            card_h = int(h * 0.36)
+            self._alert_card(canvas, (x + pad, y + pad, w - 2 * pad, card_h), alert)
+            self._bev(canvas, (x + pad, y + 2 * pad + card_h, w - 2 * pad, h - card_h - 3 * pad - 46), dec, cam, alert)
+            self._timeline(canvas, (x + pad, y + h - pad - 40, w - 2 * pad, 40))
+        if dev:
+            t = info.timings
+            self.text(x + pad, y + h - 24, f"DA3 {t.get('depth', 0):.0f} ms  SegFormer {t.get('seg', 0):.0f} ms  YOLO {t.get('det', 0):.0f} ms  "
+                                           f"fusion {t.get('fusion', 0):.0f} ms  render {t.get('render', 0):.0f} ms  {info.fps:.1f} FPS  |  "
+                                           f"zone {dec.level}  field score {dec.score:.2f}", 11, DIM, False, "lb")
+            self.text(x + pad, y + h - 7, info.ref_text, 11, info.ref_color, False, "lb")
 
     def _header(self, canvas, info: Info):
         cv2.rectangle(canvas, (0, 0), (self.w, HEADER_H), (6, 8, 11), -1)
@@ -323,19 +439,22 @@ class Dashboard:
         cv2.circle(canvas, (16, HEADER_H // 2), 6, (236, 56, 56) if info.live else (240, 168, 40), -1, cv2.LINE_AA)
         self.text(28, HEADER_H // 2, "LIVE" if info.live else "REPLAY", 13, TEXT, True, "lm")
         self.text(100, HEADER_H // 2, "ROAD RISK ASSESSMENT", 17, TEXT, True, "lm")
-        self.text(330, HEADER_H // 2, "camera-only  |  SegFormer-B2 + DA3 metric depth  |  monocular", 12, DIM, False, "lm")
+        self.text(330, HEADER_H // 2, f"{self.view} view  |  camera-only  |  DA3 metric depth + YOLO26-seg + SegFormer-B2", 12, DIM, False, "lm")
         total = f"/{info.total}" if info.total else ""
         self.text(self.w - 14, HEADER_H // 2, f"{info.source}    frame {info.frame}{total}    {info.fps:.1f} FPS    {info.gpu}",
                   13, TEXT, False, "rm")
 
-    def render(self, rgb: np.ndarray, class_map: np.ndarray, depth: np.ndarray, dec: Decision, cam: Camera, info: Info) -> np.ndarray:
+    def render(self, rgb: np.ndarray, class_map: np.ndarray, depth: np.ndarray, dec: Decision, cam: Camera, info: Info, alert) -> np.ndarray:
         """RGB canvas of the full dashboard."""
-        self.history.append((dec.score, dec.level))
+        self.history.append(alert.state)
         canvas = np.empty((self.h, self.w, 3), np.uint8)
         canvas[:] = BG
         self._header(canvas, info)
-        self._camera(canvas, rgb, dec, cam, depth.shape, info)
-        self._segmentation(canvas, rgb, class_map)
-        self._depth(canvas, depth, dec)
-        self._decision(canvas, dec, info)
+        self._camera(canvas, rgb, dec, cam, depth.shape, info, alert)
+        if self.view == "driver":
+            self._hud(canvas, 1, dec, cam, alert, info)
+        else:
+            self._segmentation(canvas, rgb, class_map)
+            self._depth(canvas, depth, dec, alert)
+            self._hud(canvas, 3, dec, cam, alert, info)
         return self._flush_text(canvas)

@@ -33,11 +33,12 @@ def main() -> None:
     ap.add_argument("--horizon", type=float)
     ap.add_argument("--height-m", dest="height_m", type=float)
     ap.add_argument("--hq", action="store_true")
+    ap.add_argument("--view", choices=["research", "driver"], default="research")
     args = ap.parse_args()
 
     from pipeline import RiskPipeline
 
-    pipe = RiskPipeline(hq=args.hq, camera={"hfov_deg": args.hfov_deg, "horizon": args.horizon, "height_m": args.height_m})
+    pipe = RiskPipeline(hq=args.hq, camera={"hfov_deg": args.hfov_deg, "horizon": args.horizon, "height_m": args.height_m}, view=args.view)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     for name in args.inputs:
@@ -46,13 +47,14 @@ def main() -> None:
         if bgr is None:
             raise FileNotFoundError(path)
         stem = path.stem + (f"_f{args.frame:06d}" if args.frame else "")
+        pipe.alerts.reset()  # unrelated images: no trend or hysteresis carried over
         result = pipe(bgr, path.stem)
         cv2.imwrite(str(out / f"{stem}_dashboard.png"), cv2.cvtColor(pipe.render(result, name=stem), cv2.COLOR_RGB2BGR))
         summary = result.to_dict()
         (out / f"{stem}.json").write_text(json.dumps(summary, indent=2))
         top = summary["most_critical"]
-        print(f"{name}: {summary['level']}"
-              + (f" at {summary['level_distance_m']} m" if summary["level_distance_m"] is not None else "")
+        print(f"{name}: {summary['alert']['state']} (zone {summary['level']}"
+              + (f" at {summary['level_distance_m']} m" if summary["level_distance_m"] is not None else "") + ")"
               + (f", most critical: {top['class']} {top['distance_m']} m" if top else "")
               + f"  -> {out / (stem + '_dashboard.png')}")
 

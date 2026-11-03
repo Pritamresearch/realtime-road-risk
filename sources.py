@@ -32,6 +32,7 @@ class Frame:
     index: int  # 1-based
     bgr: np.ndarray
     ref: Reference | None = None
+    t: float | None = None  # seconds (video time, or wall clock for cameras); None for unrelated still images
 
 
 class Source:
@@ -103,7 +104,7 @@ class VideoSource(Source):
                 break
             if wanted is not None:
                 wanted.discard(number)
-            yield Frame(number, cv2.rotate(bgr, rotation) if rotation is not None else bgr, self.refs.get(number))
+            yield Frame(number, cv2.rotate(bgr, rotation) if rotation is not None else bgr, self.refs.get(number), (number - 1) / self.fps)
         cap.release()
 
 
@@ -120,7 +121,7 @@ class CameraSource(Source):
             if not ok:
                 break
             number += 1
-            yield Frame(number, bgr)
+            yield Frame(number, bgr, t=time.perf_counter())
         cap.release()
 
 

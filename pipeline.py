@@ -40,6 +40,7 @@ class Perception:
     instances: tuple | None  # (label map, COCO classes, confidences, boxes as fractions) from YOLO
     camera: dict  # hfov_deg, horizon, height_m, optional ego_mask
     timings: dict = field(default_factory=dict)  # ms
+    t: float | None = None  # frame time in seconds (enables trend, TTC and alert hysteresis)
 
 
 @dataclass
@@ -47,6 +48,7 @@ class FrameResult:
     perception: Perception
     decision: object  # risk.Decision
     cam: object  # risk.Camera
+    alert: object = None  # hmi.Alert
 
     def to_dict(self) -> dict:
         """JSON-friendly summary of the decision."""
@@ -59,7 +61,7 @@ class FrameResult:
                     "lateral_gap_m": round(o.gap_m, 2), "field_score": round(o.field, 4),
                     "box_xyxy_frac": [round(float(v) / s, 4) for v, s in zip(o.box, (w, h, w, h))]}
 
-        return {"level": d.level, "level_distance_m": None if d.distance is None else round(d.distance, 2),
+        return {"alert": self.alert.to_dict() if self.alert else None, "level": d.level, "level_distance_m": None if d.distance is None else round(d.distance, 2),
                 "risk_score": round(d.score, 4), "most_critical": obj(d.top) if d.top else None,
                 "zones": {z.name: {"pixels": z.px, "min_m": None if z.min_m is None else round(z.min_m, 2)} for z in d.zones},
                 "objects": [obj(o) for o in sorted(d.obstacles, key=lambda o: o.distance)],
@@ -68,8 +70,9 @@ class FrameResult:
 
 
 class RiskPipeline:
-    def __init__(self, config: str | Path = CONFIG, hq: bool = False, camera: dict | None = None):
-        """camera: overrides for hfov_deg / horizon / height_m (e.g. from a calibration), applied to every frame."""
+    def __init__(self, config: str | Path = CONFIG, hq: bool = False, camera: dict | None = None, view: str = "research"):
+        """camera: overrides for hfov_deg / horizon / height_m (e.g. from a calibration), applied to every frame.
+        view: dashboard layout, "research" (4 panels) or "driver" (camera + driver alert)."""
         from models import Detector, MetricDepth, Segmenter
 
         self.cfg = yaml.safe_load(Path(config).read_text())
@@ -78,9 +81,13 @@ class RiskPipeline:
             m.update(m["hq"])
         self.risk_cfg = self.cfg["risk"]
         self.camera_override = {k: v for k, v in (camera or {}).items() if v is not None}
+        self.view = view
         self.segmenter = Segmenter(resolve_weights(m["segformer"]), m["segformer_short_side"])
         self.depth_model = MetricDepth(resolve_weights(m["depth"]), m["depth_process_res"])
         self.detector = Detector(resolve_weights(m["yolo"]), self.risk_cfg["yolo_conf"]) if self.risk_cfg["source"] == "yolo" else None
+        from hmi import AlertTracker
+
+        self.alerts = AlertTracker(self.risk_cfg, self.cfg["hmi"])
         self._ego_cache: dict = {}
         self._dashboard = None
 
@@ -103,8 +110,8 @@ class RiskPipeline:
         return self._ego_cache[key]
 
     # ---- stages ---------------------------------------------------------------------------------------------------------
-    def perceive(self, bgr: np.ndarray, source_name: str = "") -> Perception:
-        """GPU stage: metric depth, segmentation and detections for one BGR frame."""
+    def perceive(self, bgr: np.ndarray, source_name: str = "", t: float | None = None) -> Perception:
+        """GPU stage: metric depth, segmentation and detections for one BGR frame. t: frame time in seconds, for video."""
         from models import sync
 
         if max(bgr.shape[:2]) > 1280:
@@ -121,7 +128,7 @@ class RiskPipeline:
         sync()
         t3 = time.perf_counter()
         return Perception(rgb, depth, f_px, class_map, inst, cam,
-                          {"depth": 1e3 * (t1 - t0), "seg": 1e3 * (t2 - t1), "det": 1e3 * (t3 - t2)})
+                          {"depth": 1e3 * (t1 - t0), "seg": 1e3 * (t2 - t1), "det": 1e3 * (t3 - t2)}, t)
 
     def decide(self, p: Perception) -> FrameResult:
         """CPU stage: candidates (ego mask applied), corridor geometry and the risk decision."""
@@ -142,11 +149,13 @@ class RiskPipeline:
             cands = seg_candidates(p.class_map, r["class_weights"], r["min_object_px"])
         cam = camera_for(p.depth.shape, p.f_px, p.camera["horizon"], p.camera["height_m"])
         dec = assess(cands, p.depth, cam, r)
+        alert = self.alerts.update(dec, p.t)
         p.timings["fusion"] = 1e3 * (time.perf_counter() - t0)
-        return FrameResult(p, dec, cam)
+        return FrameResult(p, dec, cam, alert)
 
-    def __call__(self, bgr: np.ndarray, source_name: str = "") -> FrameResult:
-        return self.decide(self.perceive(bgr, source_name))
+    def __call__(self, bgr: np.ndarray, source_name: str = "", t: float | None = None) -> FrameResult:
+        """One frame. For a video pass t (seconds) on every call so the alert gets trend, TTC and hysteresis."""
+        return self.decide(self.perceive(bgr, source_name, t))
 
     # ---- display --------------------------------------------------------------------------------------------------------
     def params_text(self, result: FrameResult) -> str:
@@ -162,10 +171,10 @@ class RiskPipeline:
 
         if self._dashboard is None:
             d = self.cfg["display"]
-            self._dashboard = Dashboard(d["width"], d["height"], self.risk_cfg, d["history"])
+            self._dashboard = Dashboard(d["width"], d["height"], self.risk_cfg, d["history"], self.view, d["bev_range_m"])
         if info is None:
             info = Info(name, 1, None, False, 0.0, gpu_name(), dict(result.perception.timings), self.params_text(result),
                         "REF: none (single frame)", DIM, [], result.perception.camera.get("ego_mask", []))
         return self._dashboard.render(result.perception.rgb, result.perception.class_map, result.perception.depth,
-                                      result.decision, result.cam, info)
+                                      result.decision, result.cam, info, result.alert)
 

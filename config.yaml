@@ -49,7 +49,20 @@ risk:
   field_sigma_m: 3.0              # gap = lateral distance of the object outside the corridor
   dist_q: 50                      # object distance = median depth of its (eroded) mask
 
+# Driver-facing alert (hmi.py). TTC escalation is an estimate from tracked monocular depth; it is not validated against ground truth.
+hmi:
+  ttc_warning_s: 2.0          # in-corridor object approaching with TTC below this -> WARNING
+  ttc_caution_s: 4.0          # ... below this -> at least CAUTION
+  hold_s: 1.0                 # a lower state is shown only after holding this long (no flicker)
+  window_s: 3.0               # trend fit window
+  min_samples: 3              # frames needed in the window before a trend is reported
+  min_speed_mps: 0.5          # smaller closing speeds are reported as steady
+  match_iou: 0.2              # frame-to-frame box association
+  track_timeout_s: 1.5
+  history: 60
+
 display:
   width: 1600
   height: 900
   history: 60
+  bev_range_m: 45             # bird's-eye view depth

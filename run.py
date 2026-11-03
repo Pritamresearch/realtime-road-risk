@@ -69,6 +69,8 @@ def main() -> None:
     ap.add_argument("--log", help="write per-frame decisions to this .csv")
     ap.add_argument("--no-window", action="store_true")
     ap.add_argument("--hq", action="store_true", help="larger model inputs (models.hq in the config), ~1.5x slower")
+    ap.add_argument("--view", choices=["research", "driver"], default="research",
+                    help="research: camera, segmentation, depth, driver alert; driver: camera + driver alert only")
     args = ap.parse_args()
 
     from dashboard import Info
@@ -81,7 +83,7 @@ def main() -> None:
     live = mode == "live"
 
     print(f"loading models on {gpu_name()} ...", flush=True)
-    pipe = RiskPipeline(args.config, args.hq, {"hfov_deg": args.hfov_deg, "horizon": args.horizon, "height_m": args.height_m})
+    pipe = RiskPipeline(args.config, args.hq, {"hfov_deg": args.hfov_deg, "horizon": args.horizon, "height_m": args.height_m}, args.view)
     gpu = gpu_name()
 
     viewer = None
@@ -94,7 +96,7 @@ def main() -> None:
     if args.log:
         Path(args.log).parent.mkdir(parents=True, exist_ok=True)
         log_file = open(args.log, "w", newline="")
-        log = csv.DictWriter(log_file, ["frame", "level", "distance_m", "top", "top_distance_m", "score", "near_px", "mid_px", "far_px",
+        log = csv.DictWriter(log_file, ["frame", "alert", "alert_object", "ttc_s", "closing_mps", "level", "distance_m", "top", "top_distance_m", "score", "near_px", "mid_px", "far_px",
                                         "corridor_px", "hfov_deg", "t_depth_ms", "t_seg_ms", "t_det_ms", "t_fusion_ms",
                                         "ref_label", "ref_iou", "ref_hit"])
         log.writeheader()
@@ -109,7 +111,7 @@ def main() -> None:
             for frame in (iter(reader) if live else src.frames()):
                 if stop.is_set():
                     break
-                item = (frame, pipe.perceive(frame.bgr, src.name))
+                item = (frame, pipe.perceive(frame.bgr, src.name, frame.t))
                 while not stop.is_set():
                     try:
                         results.put(item, timeout=0.1)
@@ -156,13 +158,16 @@ def main() -> None:
             t_prev = t5
             fps_ema = 1.0 / dt if fps_ema == 0 else 0.8 * fps_ema + 0.2 / dt
 
-            levels[dec.level] += 1
+            levels[res.alert.state] += 1
             if "ref_hit" in ref_log:
                 hits.append(ref_log["ref_hit"])
             if log:
                 z = {zz.name: zz.px for zz in dec.zones}
                 top_d = None if dec.top is None else (dec.top.corridor_distance if dec.top.corridor_distance is not None else dec.top.distance)
-                log.writerow({"frame": frame.index, "level": dec.level, "distance_m": None if dec.distance is None else round(dec.distance, 2),
+                al = res.alert
+                log.writerow({"frame": frame.index, "alert": al.state, "alert_object": al.obj.name if al.obj else "",
+                              "ttc_s": None if al.trend.ttc_s is None else round(al.trend.ttc_s, 2),
+                              "closing_mps": None if al.trend.closing_mps is None else round(al.trend.closing_mps, 2), "level": dec.level, "distance_m": None if dec.distance is None else round(dec.distance, 2),
                               "top": dec.top.name if dec.top else "", "top_distance_m": None if top_d is None else round(top_d, 2),
                               "score": round(dec.score, 3), "near_px": z["NEAR"], "mid_px": z["MID"], "far_px": z["FAR"],
                               "corridor_px": dec.corridor_px, "hfov_deg": perception.camera["hfov_deg"],
@@ -207,7 +212,7 @@ def main() -> None:
             viewer.close()
 
     n = sum(levels.values())
-    print(f"\nprocessed {n} frames, {fps_ema:.2f} FPS at the end; levels: " + ", ".join(f"{k} {v}" for k, v in levels.most_common()))
+    print(f"\nprocessed {n} frames, {fps_ema:.2f} FPS at the end; alerts: " + ", ".join(f"{k} {v}" for k, v in levels.most_common()))
     if hits:
         print(f"annotated frames with boxes: {len(hits)}, top-1 hit (IoU >= 0.5): {np.mean(hits):.3f}")
 

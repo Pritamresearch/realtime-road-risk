@@ -6,15 +6,18 @@ Author: **Pritam Chakraborty** (pritam.23.research@gmail.com)
 
 ![Live dashboard](docs/demo.gif)
 
-One camera frame in. Out come distances in metres to every road user, a corridor alarm (**NEAR / MID / FAR / CLEAR**), the single
-**most critical object**, and a four-panel dashboard:
+One camera frame in. Out come:
+- distances in metres to every road user;
+- a driver alert (**WARNING / CAUTION / CLEAR**) with the object, its bearing, its approach speed and its time to collision;
+- the single **most critical object**;
+- a dashboard in one of two layouts.
 
-| Panel | Shows |
+| View | Panels |
 |---|---|
-| 01 Camera | frame with the ego corridor projected on the road (NEAR red, MID orange, FAR green), every detected road user with its distance, the most critical object highlighted |
-| 02 Semantic segmentation | SegFormer-B2 (Cityscapes, 19 classes) over the frame, with a legend of the classes present |
-| 03 Metric depth | Depth Anything 3 Metric-Large in metres (0-60 m colour bar), crosshair on the critical point |
-| 04 Risk decision | risk level, most critical object and distance, risk score, obstacle pixels per distance zone, 60-frame score history, per-stage timings, the settings in use |
+| `--view research` (default) | 01 camera with the projected ego corridor and per-object distances · 02 SegFormer-B2 segmentation · 03 metric depth (0-60 m) · 04 **driver alert** with a top view and alert history, plus one grey line of research metrics |
+| `--view driver` | the camera, large, and the **driver alert** column only: what an in-vehicle display would show |
+
+![Driver view](docs/driver_view.jpg)
 
 ---
 
@@ -24,13 +27,14 @@ One camera frame in. Out come distances in metres to every road user, a corridor
 2. [Install](#install)
 3. [Run it on a video](#run-it-on-a-video)
 4. [Run it on a single frame](#run-it-on-a-single-frame) (command line, Python API, JSON output)
-5. [Camera assumptions](#camera-assumptions-read-before-trusting-a-distance)
-6. [Configuration](#configuration)
-7. [Results](#results)
-8. [Speed](#speed)
-9. [Reproducing the evaluation](#reproducing-the-evaluation)
-10. [Limitations](#limitations)
-11. [Repository layout](#repository-layout) · [Licences](#licences) · [Citation](#citation)
+5. [Driver alert interface](#driver-alert-interface)
+6. [Camera assumptions](#camera-assumptions-read-before-trusting-a-distance)
+7. [Configuration](#configuration)
+8. [Results](#results)
+9. [Speed](#speed)
+10. [Reproducing the evaluation](#reproducing-the-evaluation)
+11. [Limitations](#limitations)
+12. [Repository layout](#repository-layout) · [Licences](#licences) · [Citation](#citation)
 
 ---
 
@@ -122,6 +126,7 @@ converted to safetensors on first load, because transformers 4.x refuses `torch.
 
 ```bash
 python run.py path/to/drive.mp4                          # live: plays at native speed, processes the newest frame
+python run.py path/to/drive.mp4 --view driver            # in-vehicle layout: camera + driver alert only
 python run.py 0                                          # webcam 0
 python run.py path/to/drive.mp4 --mode all               # every frame (slower than real time, nothing skipped)
 python run.py path/to/drive.mp4 --mode all --every 5     # every 5th frame
@@ -139,7 +144,8 @@ Phone videos with rotation metadata are turned upright automatically.
 | column | meaning |
 |---|---|
 | `frame` | 1-based frame number in the source |
-| `level`, `distance_m` | alarm level and the corridor distance behind it |
+| `alert`, `alert_object`, `ttc_s`, `closing_mps` | driver alert state (after hysteresis), the object it is about, time to collision and closing speed when measured |
+| `level`, `distance_m` | corridor zone (NEAR / MID / FAR / CLEAR) and the corridor distance behind it |
 | `top`, `top_distance_m`, `score` | most critical object, its distance, the frame risk score |
 | `near_px`, `mid_px`, `far_px`, `corridor_px` | in-corridor obstacle pixels per zone |
 | `t_depth_ms`, `t_seg_ms`, `t_det_ms`, `t_fusion_ms` | per-stage latency |
@@ -160,13 +166,17 @@ python predict_frame.py frame.jpg --hfov-deg 70 --horizon 0.48 --height-m 1.4
 Console output:
 
 ```
-frame.jpg: NEAR at 3.43 m, most critical: person 3.85 m  -> out/frame_dashboard.png
+frame.jpg: WARNING (zone NEAR at 3.43 m), most critical: person 3.85 m  -> out/frame_dashboard.png
 ```
 
 `out/frame.json` (abridged):
 
 ```json
 {
+  "alert": {
+    "state": "WARNING", "raw_state": "WARNING", "object": "person", "distance_m": 3.41, "bearing": "AHEAD",
+    "trend": "unknown", "closing_speed_mps": null, "ttc_s": null, "reason": "corridor zone NEAR", "watch": null, "held_s": null
+  },
   "level": "NEAR",
   "level_distance_m": 3.43,
   "risk_score": 0.8249,
@@ -186,7 +196,7 @@ frame.jpg: NEAR at 3.43 m, most critical: person 3.85 m  -> out/frame_dashboard.
 ```
 
 Boxes are fractions of the frame width and height (`x0, y0, x1, y1`). `corridor_distance_m` is `null` when the object never enters the
-corridor. These timings are from a single frame and include GPU warm-up; in a video the steady state is about 264 / 120 / 30 ms.
+corridor. A single image has no motion, so `trend` is `unknown` and there is no TTC; pass a time `t` per frame (below) to get them. These timings are from a single frame and include GPU warm-up; in a video the steady state is about 264 / 120 / 30 ms.
 
 ### Python API
 
@@ -198,8 +208,10 @@ pipe = RiskPipeline()                                   # loads the three models
 # pipe = RiskPipeline(camera={"hfov_deg": 70, "horizon": 0.48, "height_m": 1.4})   # calibrated camera
 
 frame = cv2.imread("frame.jpg")                         # any BGR frame, e.g. from cv2.VideoCapture
-result = pipe(frame)                                    # perceive (GPU) + decide (fusion)
+result = pipe(frame)                                    # perceive (GPU) + decide (fusion) + driver alert
 
+a = result.alert
+print(a.state, a.obj.name if a.obj else None, a.distance, a.bearing)   # 'WARNING' 'person' 3.41 'AHEAD'
 d = result.decision
 print(d.level, d.distance, d.score)                     # 'NEAR' 3.43 0.82
 if d.top:
@@ -210,8 +222,60 @@ dashboard = pipe.render(result)                         # RGB uint8, 1600x900
 cv2.imwrite("dashboard.png", cv2.cvtColor(dashboard, cv2.COLOR_RGB2BGR))
 ```
 
-For your own video loop, call `pipe.perceive(frame)` on a worker thread and `pipe.decide(perception)` on the consumer side,
+For a video, pass each frame's time in seconds so the alert can track objects, estimate approach speed and TTC, and apply hysteresis:
+
+```python
+cap = cv2.VideoCapture("drive.mp4")
+fps, n = cap.get(cv2.CAP_PROP_FPS), 0
+pipe = RiskPipeline(view="driver")
+while True:
+    ok, frame = cap.read()
+    if not ok:
+        break
+    n += 1
+    if n % 10:                                          # e.g. every 10th frame
+        continue
+    result = pipe(frame, t=n / fps)
+    a = result.alert
+    if a.state != "CLEAR":
+        print(f"{n / fps:6.1f} s  {a.state}  {a.obj.name} {a.distance:.1f} m {a.bearing}  "
+              f"{a.trend.label}" + (f", TTC {a.trend.ttc_s:.1f} s" if a.trend.ttc_s else ""))
+```
+
+To overlap GPU and drawing, call `pipe.perceive(frame, t=...)` on a worker thread and `pipe.decide(perception)` on the consumer side,
 as `run.py` does.
+
+---
+
+## Driver alert interface
+
+The first dashboard showed a research readout: zone labels (a green "FAR" for a truck in the lane), pixel counts, a score bar and model
+timings. None of that tells a driver what to do. The alert panel now follows the usual forward-collision-warning conventions:
+
+| Element | Design |
+|---|---|
+| **State** | one of three, each shown as colour + icon + word, never colour alone: **WARNING** (red fill, triangle), **CAUTION** (amber fill, triangle), **CLEAR** (neutral, check mark). Nothing on the road ahead is ever shown as "safe green". |
+| **What and where** | the object in your path, its distance in large type, and a bearing arrow: AHEAD, AHEAD-LEFT / AHEAD-RIGHT (in the corridor but off-centre), LEFT / RIGHT (outside it) |
+| **Trend** | approaching / moving away with the closing speed, plus **TTC** (time to collision) for objects in your path. When there is not enough data the panel says "trend not yet measured" rather than "steady". |
+| **CLEAR state** | quiet: "no obstacle in your path" and the nearest road user on one small line, no headline numbers |
+| **Hysteresis** | a higher state appears at once; a lower one only after holding 1 s. While held, the card says "last seen 0.7 s ago: car 7.7 m" instead of showing stale numbers as live. |
+| **Also watch** | when the risk field's most critical object (e.g. a pedestrian at the kerb) is not the one in your path, it is named on a secondary line |
+| **Top view** | metres: your car at the bottom, the ±2 m corridor shaded by zone, 14 m and 30 m lines, the camera's field of view, every road user at its (X, Z) position (lateral scale stretched for readability) |
+| **Alert history** | the last 60 alert states as a strip, so recent escalations stay visible |
+
+![Research view](docs/research_view.jpg)
+
+**How the state is decided** (`hmi.py`, thresholds in `config.yaml` under `hmi`):
+- NEAR zone in the corridor → WARNING, MID zone → CAUTION, otherwise CLEAR.
+- An object in the corridor that is approaching with TTC < 2 s escalates to WARNING; TTC < 4 s escalates to at least CAUTION.
+- **Trend:** objects are tracked across frames by box overlap within a class. A line is fitted to each track's distance over the last
+  3 s. A trend is reported only when the slope exceeds both 0.5 m/s and twice its standard error. Monocular depth jitters by a few
+  percent per frame, so without this test TTC would be noise.
+- **TTC** = distance / closing speed. It is relative (no ego speed needed) and shown only for objects in your path: beside the path,
+  closing speed mostly reflects your own motion past a parked object.
+
+The TTC escalation and the hysteresis are **not part of the evaluated system** (no ground truth for them here). The reported results
+cover the zone alarm and the most critical object; the alert layer is a display policy on top.
 
 ---
 
@@ -262,6 +326,9 @@ Everything lives in [`config.yaml`](config.yaml):
 | `risk.max_height_m` | 3.0 | corridor height above the road |
 | `risk.min_px`, `risk.quantile`, `risk.erode` | 25, 1, 1 | alarm guards: pixels per zone, distance percentile, mask erosion |
 | `camera.default` / `camera.portrait` | 65 deg / 45 deg | FOV, horizon, camera height presets |
+| `hmi.ttc_warning_s`, `hmi.ttc_caution_s` | 2.0, 4.0 | TTC escalation thresholds |
+| `hmi.hold_s` | 1.0 | hysteresis before a lower alert state is shown |
+| `hmi.window_s`, `hmi.min_samples`, `hmi.min_speed_mps` | 3.0, 3, 0.5 | trend fit window and significance floor |
 
 ---
 
@@ -312,9 +379,9 @@ Full tables and per-fold choices: [`docs/eval_results.md`](docs/eval_results.md)
 | | |
 |---|---|
 | ![Bolpur](docs/dashboard_bolpur.jpg) | ![Sikkim](docs/dashboard_sikkim.jpg) |
-| **Bolpur:** a parked truck 23.7 m ahead in the corridor (MID); the trucks on the right are outside it and only labelled. | **Sikkim, a failure mode:** on a curve, an oncoming car in its own lane falls inside the *straight* corridor and is flagged NEAR at 7.7 m. |
+| **Bolpur:** a parked truck 23.7 m ahead-left reaches the corridor: CAUTION. The trucks on the right are outside the path and only labelled. | **Sikkim, a failure mode:** on a curve, an oncoming car in its own lane falls inside the *straight* corridor: WARNING at 7.7 m ahead-right. |
 | ![Dhaka](docs/dashboard_dhaka.jpg) | ![Bhubaneswar night](docs/dashboard_bhubaneswar_night.jpg) |
-| **Dhaka (phone, portrait), a missing class:** the cycle-rickshaw rider ahead is found as a *person* at 5.3 m (NEAR), but the annotator boxed the whole rickshaw, so the eval line reads MISS (IoU 0.13). There is no rickshaw class in COCO or Cityscapes. | **Bhubaneswar at night:** a car about 5.6 m ahead-right reaches the corridor (NEAR); the bus and motorcycle are labelled with their distances. |
+| **Dhaka (phone, portrait), a missing class:** the cycle-rickshaw ahead is detected as a *bicycle* at 4.9 m (WARNING) and its rider as a *person* ("also watch"). The annotator boxed the whole rickshaw, so the eval line reads MISS (IoU 0.13): COCO and Cityscapes have no rickshaw class. | **Bhubaneswar at night:** a car 5.6 m ahead in the corridor: WARNING. The bus and the motorcycle are placed in the top view with their distances. |
 
 ---
 
@@ -354,7 +421,10 @@ python run.py <clip> --annotated     # live view of the annotated frames with an
 
 - **Distances are assumption-bound:** an uncalibrated FOV, a flat road, zero pitch and a fixed camera height. They have not been checked
   against lidar.
-- **The corridor is straight ahead:** no steering, lane curvature or ego speed; no tracking or time-to-collision.
+- **The corridor is straight ahead:** no steering, lane curvature or ego speed. On curves, oncoming traffic in its own lane can enter
+  the straight corridor (see the Sikkim example).
+- **TTC is unvalidated:** it comes from simple box tracking at about 2.4 FPS. Fast crossing objects can lose their track, and the
+  significance test then suppresses the trend.
 - **The labels are thin:** one annotator, 8 clips. The labels mark attention-worthy objects, not measured collision risk.
 - **Classes are missing:** COCO/Cityscapes have no cycle-rickshaw or auto-rickshaw, and these are frequent in South Asian traffic.
 - **Dash cams need care:** a camera that sees its own vehicle needs an ego mask.
@@ -370,7 +440,8 @@ predict_frame.py    single frames -> dashboard PNG + decision JSON
 pipeline.py         RiskPipeline: perceive (GPU) + decide (fusion) + render; the Python API
 models.py           DA3 metric depth (fast path), SegFormer-B2, YOLO26s-seg wrappers
 risk.py             geometry, corridor, objects, alarm level, risk field
-dashboard.py        four-panel renderer (OpenCV shapes, PIL text)
+hmi.py              driver alert: tracking, trend, TTC, hysteresis
+dashboard.py        research and driver layouts: camera, segmentation, depth, alert card, top view (OpenCV shapes, PIL text)
 viewer.py           Tk window (works with opencv-python-headless)
 sources.py          video (rotation-aware), webcam, images; optional reference labels
 config.yaml         models, camera presets, risk parameters
