@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Pritam Chakraborty <pritam.23.research@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Four-panel dashboard: camera with corridor and obstacle distances, segmentation, metric depth, risk decision.
 
 Shapes are drawn with OpenCV on an RGB canvas; text is queued and drawn in one PIL pass at the end (monospace TrueType).

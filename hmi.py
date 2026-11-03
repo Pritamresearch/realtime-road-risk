@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Pritam Chakraborty <pritam.23.research@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Driver-facing alert logic on top of the per-frame decision: one alert state, object trend, time to collision, hysteresis.
 
 States (forward-collision-warning convention: colour + icon + word, never colour alone):

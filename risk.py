@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Pritam Chakraborty <pritam.23.research@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Late fusion of obstacle candidates and metric depth into a risk decision.
 
 Geometry: pinhole camera, principal point at the image centre column and the horizon row, zero pitch and roll. A pixel (u, v)

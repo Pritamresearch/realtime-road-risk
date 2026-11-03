@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Pritam Chakraborty <pritam.23.research@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Tk window for the dashboard (the installed opencv-python-headless has no imshow). Scales the frame to the window size."""
 from __future__ import annotations
 

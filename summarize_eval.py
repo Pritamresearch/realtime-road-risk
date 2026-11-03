@@ -1,6 +1,8 @@
+# Copyright (C) 2026 Pritam Chakraborty <pritam.23.research@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Summarise `run.py --annotated --log out/eval/<clip>.csv` logs: per-clip top-1 hit on boxed frames and the level mix.
 
-Top-1 hit = the most critical object's box has IoU >= 0.5 with a human "must attend to" box (the v1 object-level criterion).
+Top-1 hit = the most critical object's box has IoU >= 0.5 with a human "must attend to" box (object-level criterion).
 For the full offline comparison with intervals and LOCO selection use evaluate.py instead.
 """
 from __future__ import annotations

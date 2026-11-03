@@ -2,7 +2,7 @@
 
 **Metric depth + instance segmentation + semantic segmentation, fused into an interpretable risk decision, live on a 6 GB laptop GPU.**
 
-Author: **Pritam Chakraborty** (pritam.23.research@gmail.com)
+Author: **Pritam Chakraborty** (pritam.23.research@gmail.com) · Licence: [AGPL-3.0-or-later](LICENSE)
 
 ![Live dashboard](docs/demo.gif)
 
@@ -34,7 +34,7 @@ One camera frame in. Out come:
 9. [Speed](#speed)
 10. [Reproducing the evaluation](#reproducing-the-evaluation)
 11. [Limitations](#limitations)
-12. [Repository layout](#repository-layout) · [Licences](#licences) · [Citation](#citation)
+12. [Repository layout](#repository-layout) · [Data layout](#data-layout) · [Licence](#licence) · [Citation](#citation)
 
 ---
 
@@ -134,6 +134,7 @@ python run.py path/to/drive.mp4 --save out/drive_dashboard.mp4 --log out/drive.c
 python run.py path/to/drive.mp4 --hfov-deg 70 --horizon 0.48 --height-m 1.4   # your camera
 python run.py path/to/drive.mp4 --hq                     # larger model inputs, ~1.5x slower
 python run.py path/to/images/                            # a folder of frames, in name order
+python run.py sikim                                      # part of a file name in data/videos/
 ```
 
 Keys in the window: `q` / `Esc` quit, `space` pause, `s` save a screenshot to `out/`. `--no-window` runs headless (with `--save`/`--log`).
@@ -406,13 +407,13 @@ Not done yet: TensorRT / ONNX export, `torch.compile` (no Triton on Windows), IN
 
 ## Reproducing the evaluation
 
-Needs the annotated clips and the annotation loader of the companion study, laid out as `../v1/` (not part of this repository).
+Needs the annotated clips in `data/` (see [Data layout](#data-layout)); they are not part of the repository.
 
 ```bash
 python eval_cache.py      # all models once on the 242 annotated frames -> cache/eval/ (~5 min)
 python evaluate.py        # 120 pre-declared variants, LOCO selection, bootstrap -> out/eval_results.md, out/eval_frames*.csv
 python make_figures.py    # docs/results.png, docs/timings.png
-python run.py <clip> --annotated     # live view of the annotated frames with an eval-only MATCH/MISS line
+python run.py sikim --annotated      # live view of the annotated frames with an eval-only MATCH/MISS line
 ```
 
 ---
@@ -443,22 +444,53 @@ risk.py             geometry, corridor, objects, alarm level, risk field
 hmi.py              driver alert: tracking, trend, TTC, hysteresis
 dashboard.py        research and driver layouts: camera, segmentation, depth, alert card, top view (OpenCV shapes, PIL text)
 viewer.py           Tk window (works with opencv-python-headless)
-sources.py          video (rotation-aware), webcam, images; optional reference labels
-config.yaml         models, camera presets, risk parameters
+sources.py          video (rotation-aware), webcam, images, BDD-OIA; optional reference labels
+datasets.py         loaders for the annotated clips and BDD-OIA (local data/)
+config.yaml         models, camera presets, risk and alert parameters
 download_weights.py model checkpoints -> weights/
+eval_clips.yaml     the 8 evaluation clips (annotation file -> video)
 eval_cache.py, evaluate.py, eval_grid.yaml, make_figures.py, summarize_eval.py    evaluation
 docs/               figures, screenshots, evaluation summary
+LICENSE             GNU AGPL-3.0
+THIRD_PARTY_NOTICES.md   model, library and data licences
 ```
 
-## Licences
+Created locally and git-ignored: `weights/`, `third_party/` (Depth Anything 3 source), `data/`, `cache/`, `out/`.
 
-The code in this repository is by Pritam Chakraborty; all rights reserved unless a licence file is added. The models keep their own licences:
+## Data layout
 
-| Model | Licence |
-|---|---|
-| Depth Anything 3 Metric-Large | Apache-2.0 |
-| YOLO26s-seg / ultralytics | **AGPL-3.0**: distributing software that uses it may require releasing that software under AGPL-3.0 |
-| SegFormer-B2 Cityscapes | NVIDIA SegFormer licence (non-commercial research) |
+Only needed for the evaluation, the `--annotated` reference line and BDD-OIA browsing; the pipeline itself needs nothing in `data/`.
+
+```
+data/
+  videos/                  the clips named in eval_clips.yaml (e.g. sikim.mp4, bdd100k/00a0f008-3c67908e.mov)
+  annotations/<clip>.csv   one file per clip
+  bdd_oia/lastframe/       BDD-OIA release: {train,val,test}_25k_images_actions.json, data/*.jpg
+```
+
+An annotation file starts with `# key: value` header lines, of which `size: WxH` (the upright full-size frame) is required, followed by
+CSV rows `frame,x0,y0,x1,y1,none`:
+- `frame` is a 1-based video frame number;
+- boxes are pixels of the upright frame;
+- `none=1` marks a frame judged to have nothing safety-critical;
+- a frame can have several box rows.
+
+To evaluate on your own clips, add them to `eval_clips.yaml` with an annotation file each.
+
+## Licence
+
+Copyright (C) 2026 Pritam Chakraborty.
+
+This program is free software: you can redistribute it and/or modify it under the terms of the **GNU Affero General Public License**
+as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. It is
+distributed WITHOUT ANY WARRANTY. See [`LICENSE`](LICENSE).
+
+**Why AGPL-3.0:** the pipeline depends on Ultralytics YOLO26, which is AGPL-3.0, so the combined work is distributed under the same
+licence. If you run a modified version as a network service, the AGPL requires you to offer its source to the users of that service.
+
+**Model weights keep their own licences** and are not redistributed here. Depth Anything 3 Metric-Large is Apache-2.0. YOLO26s-seg is
+AGPL-3.0. SegFormer-B2 Cityscapes is **non-commercial** (NVIDIA SegFormer licence). Details are in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 The screenshots and the GIF come from the author's own recordings. No BDD100K, BDD-OIA or KITTI images are included.
 
@@ -469,6 +501,7 @@ The screenshots and the GIF come from the author's own recordings. No BDD100K, B
   author = {Chakraborty, Pritam},
   title  = {Real-time Road Risk Assessment from a Single Camera: Metric Depth and Instance Segmentation with Late Fusion},
   year   = {2026},
+  license = {AGPL-3.0-or-later},
   note   = {pritam.23.research@gmail.com}
 }
 ```

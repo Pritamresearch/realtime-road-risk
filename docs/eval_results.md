@@ -5,10 +5,10 @@
 | Method | top-1 hit [95% CI] | minus box height [95% CI] | frame AUROC |
 |---|---|---|---|
 | LOCO-selected (held out) | 0.430 [0.250, 0.588] | -0.035 [-0.119, +0.023] | 0.964 |
-| v1 box height | 0.465 [0.283, 0.630] | +0.000 [+0.000, +0.000] | 0.936 |
-| v1 box bottom | 0.430 [0.241, 0.592] | -0.035 [-0.117, +0.014] | 0.846 |
-| v1 semantic only | 0.394 [0.196, 0.636] | -0.070 [-0.158, +0.071] | 0.868 |
-| previous realtime (seg, corridor) | 0.218 [0.068, 0.343] | -0.246 [-0.370, -0.146] | 0.871 |
+| box height (no depth) | 0.465 [0.283, 0.630] | +0.000 [+0.000, +0.000] | 0.936 |
+| box bottom (no depth) | 0.430 [0.241, 0.592] | -0.035 [-0.117, +0.014] | 0.846 |
+| class weight only (no depth) | 0.394 [0.196, 0.636] | -0.070 [-0.158, +0.071] | 0.868 |
+| first version (seg regions, corridor) | 0.218 [0.068, 0.343] | -0.246 [-0.370, -0.146] | 0.871 |
 | best on all clips (in-sample): yolo|0.25|road_users|q50|field|l20|s3 | 0.444 [0.271, 0.608] | -0.021 [-0.101, +0.053] | 0.960 |
 
 Oracle ceiling (any grid variant hits): 0.634

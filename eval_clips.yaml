@@ -1,0 +1,11 @@
+# The 8 annotated evaluation clips (242 frames: 142 with "must attend to" boxes, 100 marked "nothing safety-critical").
+# Key = annotation file stem in data/annotations/; video = path under data/videos/. Data files are not part of the repository.
+clips:
+  bdd100k_00_00a0f008_3c67908e: {video: bdd100k/00a0f008-3c67908e.mov, condition: day, source: BDD100K training video}
+  kitti_00_challenge_video: {video: kitti/challenge_video.mp4, condition: day, source: public highway video}
+  real_00_WhatsApp_Video_2026_03_10_at_12_43_54_AM: {video: india bolpur.mp4, condition: day, source: own recording (Bolpur)}
+  malaysia_00_malaysia: {video: malaysia.mp4, condition: day, source: own recording (Malaysia)}
+  sikkim_00_sikim: {video: sikim.mp4, condition: day, source: own recording (Sikkim)}
+  dhaka_00_dhaka_night_light: {video: dhaka night light.mp4, condition: night, source: own recording (Dhaka)}
+  dhaka_01_dhaka: {video: dhaka.mp4, condition: night, source: own recording (Dhaka)}
+  bhubaneswar_00_bhubaneswar_night_light: {video: bhubaneswar night light.mp4, condition: night, source: own recording (Bhubaneswar)}

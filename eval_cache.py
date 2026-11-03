@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Pritam Chakraborty <pritam.23.research@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Run every model once on the 242 annotated own-clip frames and cache the outputs, so fusion variants can be evaluated offline.
 
 Per frame (cache/eval/<clip>/<frame>.npz):
@@ -6,7 +8,7 @@ Per frame (cache/eval/<clip>/<frame>.npz):
   yolo_label          YOLO26s-seg instance label map on the 504 depth grid (0 = background, k = instance k-1; low confidence painted first)
   yolo_cls, yolo_conf, yolo_box   per instance; boxes as fractions of the frame (x0, y0, x1, y1)
   ref_box             annotated boxes as fractions (empty for "nothing safety-critical" frames)
-Frames are prepared exactly as run.py does (upright, at most 1280 px); YOLO sees the frame at 640 px on the long side, as in v1.
+Frames are prepared exactly as run.py does (upright, at most 1280 px); YOLO sees the frame at 640 px on the long side.
 """
 from __future__ import annotations
 
@@ -19,7 +21,8 @@ import yaml
 
 from models import Detector, MetricDepth, Segmenter, sync
 from pipeline import resolve_weights
-from sources import V1, VideoSource
+import datasets
+from sources import VideoSource
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "cache" / "eval"
@@ -27,13 +30,7 @@ YOLO_CONF = 0.10  # lowest threshold of the grid; higher thresholds are applied 
 
 
 def clips() -> list[Path]:
-    import sys
-
-    sys.path.insert(0, str(V1))
-    from datasets import own_clips
-
-    sys.path.pop(0)
-    return [(V1 / "real data" / rel) for rel in own_clips.VIDEOS.values()]
+    return [datasets.video_path(c) for c in datasets.eval_clips()]
 
 
 def main() -> None:

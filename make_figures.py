@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Pritam Chakraborty <pritam.23.research@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """README figures: docs/results.png (top-1 hit and frame AUROC by method) and docs/timings.png (per-stage latency, before/after).
 
     python make_figures.py          # needs out/eval_frames.csv from evaluate.py
@@ -28,7 +30,7 @@ plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 10, "axes.edgeco
 def results_figure() -> None:
     df = pd.read_csv(HERE / "out" / "eval_frames.csv")
     grid = yaml.safe_load((HERE / "eval_grid.yaml").read_text())
-    refs = ["v1 box height", "v1 box bottom", "v1 semantic only", "previous realtime (seg, corridor)"]
+    refs = ["box height (no depth)", "box bottom (no depth)", "class weight only (no depth)", "first version (seg regions, corridor)"]
     cands = [v for v in df.variant.unique() if v not in refs]
     sel, _ = loco(df, cands)
     draws, keys = bootstrap_draws(df[df.variant == refs[0]], grid["n_boot"], grid["seed"])
@@ -36,8 +38,8 @@ def results_figure() -> None:
     def hits(fdf):
         return keys.merge(fdf[fdf.boxed][["clip", "frame", "hit"]], on=["clip", "frame"], how="left")["hit"].to_numpy(float)
 
-    rows = [("This system (held-out LOCO)", sel, True), ("v1 box height (no depth)", df[df.variant == refs[0]], False),
-            ("v1 box bottom (no depth)", df[df.variant == refs[1]], False), ("v1 class weight only", df[df.variant == refs[2]], False),
+    rows = [("This system (held-out LOCO)", sel, True), ("Box height (no depth)", df[df.variant == refs[0]], False),
+            ("Box bottom (no depth)", df[df.variant == refs[1]], False), ("Class weight only (no depth)", df[df.variant == refs[2]], False),
             ("First real-time version", df[df.variant == refs[3]], False)]
     stats = [(name, *ci(hits(f), draws), auroc(f.score.to_numpy(float), f.boxed.to_numpy(bool)), ours) for name, f, ours in rows]
 

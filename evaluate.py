@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Pritam Chakraborty <pritam.23.research@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Offline evaluation of fusion variants on the cached 242 annotated frames (run eval_cache.py first).
 
     python evaluate.py                 # grid from eval_grid.yaml -> out/eval_results.md, out/eval_frames.csv
@@ -123,14 +125,14 @@ def score_frames(cfg: dict, grid: dict, res: int = 504) -> pd.DataFrame:
                 label[on_grid(ego.astype(np.uint8), label.shape).astype(bool)] = 0
             objs = instance_candidates(label, z["yolo_cls"], z["yolo_conf"], z["yolo_box"], weights, 0.25, 1)
             h = depth.shape[0]
-            for name, key in (("v1 box height", lambda o: o.weight * (o.box[3] - o.box[1]) / h),
-                              ("v1 box bottom", lambda o: o.weight * o.box[3] / h), ("v1 semantic only", lambda o: o.weight)):
+            for name, key in (("box height (no depth)", lambda o: o.weight * (o.box[3] - o.box[1]) / h),
+                              ("box bottom (no depth)", lambda o: o.weight * o.box[3] / h), ("class weight only (no depth)", lambda o: o.weight)):
                 best = max(objs, key=lambda o: (key(o), o.mask.sum())) if objs else None
                 add(name, best.box if best else None, key(best) if best else 0.0, "")
             old = {"person": 1, "rider": 1, "car": 1, "truck": 1, "bus": 1, "train": 1, "motorcycle": 1, "bicycle": 1}
             rcfg = {**cfg["risk"], "class_weights": old, "dist_q": 5, "rule": "corridor", "field_lambda_m": 20.0, "field_sigma_m": math.inf}
             dec = assess(candidates_for(z, "seg", old, 0.0, depth.shape, ego, cfg), depth, cam, rcfg)
-            add("previous realtime (seg, corridor)", dec.top.box if dec.top else None, dec.score, dec.level)
+            add("first version (seg regions, corridor)", dec.top.box if dec.top else None, dec.score, dec.level)
         if (i + 1) % 40 == 0:
             print(f"scored {i + 1}/{len(files)} frames", flush=True)
     return pd.DataFrame(rows)
@@ -177,7 +179,7 @@ def main() -> None:
     out.mkdir(exist_ok=True)
     df.to_csv(out / "eval_frames.csv", index=False)
 
-    refs = ["v1 box height", "v1 box bottom", "v1 semantic only", "previous realtime (seg, corridor)"]
+    refs = ["box height (no depth)", "box bottom (no depth)", "class weight only (no depth)", "first version (seg regions, corridor)"]
     cands = [v for v in df.variant.unique() if v not in refs]
     sel, choice = loco(df, cands)
     rate = per_clip_rate(df[df.variant.isin(cands)]).reindex(cands)
@@ -190,7 +192,7 @@ def main() -> None:
         return m["hit"].to_numpy(float)
 
     table = []
-    ref_hits = aligned(df[df.variant == "v1 box height"])
+    ref_hits = aligned(df[df.variant == "box height (no depth)"])
     for name, fdf in [("LOCO-selected (held out)", sel)] + [(r, df[df.variant == r]) for r in refs] + \
                      [(f"best on all clips (in-sample): {full_best}", df[df.variant == full_best])]:
         hits = aligned(fdf)

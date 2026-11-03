@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Pritam Chakraborty <pritam.23.research@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """RiskPipeline: one video frame (BGR, any size) in; metric depth, segmentation, detections, risk decision and dashboard out.
 
     from pipeline import RiskPipeline
@@ -23,10 +25,10 @@ CONFIG = HERE / "config.yaml"
 
 
 def resolve_weights(name: str) -> Path:
-    """weights/<name> in this folder, else the sibling v1 study's weights folder (development layout)."""
-    for root in (HERE / "weights", HERE.parent / "v1" / "weights"):
-        if (root / name).exists():
-            return root / name
+    """weights/<name> in this folder."""
+    path = HERE / "weights" / name
+    if path.exists():
+        return path
     raise FileNotFoundError(f"weights/{name} not found: run `python download_weights.py` first")
 
 

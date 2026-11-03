@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Pritam Chakraborty <pritam.23.research@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Real-time road risk assessment from one camera: DA3 metric depth + YOLO26-seg + SegFormer-B2, late fusion, live dashboard.
 
 Examples (from this folder):
@@ -34,7 +36,7 @@ def box_iou(a, b) -> float:
 
 def compare_reference(dec, ref, depth_hw) -> tuple[str, tuple[int, int, int], dict]:
     """Eval-only line for the dashboard and the log. Annotator frames: top-1 hit = the most critical object's box has IoU >= 0.5
-    with a human box (the v1 object top-1 criterion). BDD-OIA: the action label is shown, not scored."""
+    with a human box (object-level top-1 criterion). BDD-OIA: the action label is shown, not scored."""
     from dashboard import DIM, LEVEL_RGB
 
     if ref is None:
@@ -55,7 +57,7 @@ def compare_reference(dec, ref, depth_hw) -> tuple[str, tuple[int, int, int], di
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("source", help="video, image, image folder, camera index, bdd_oia[:split], or part of a file name in ../v1/real data")
+    ap.add_argument("source", help="video, image, image folder, camera index, bdd_oia[:split], or part of a file name in data/videos")
     ap.add_argument("--config", default=str(HERE / "config.yaml"))
     ap.add_argument("--mode", choices=["live", "all"], help="live: real-time playback, drop frames; all: process every frame (default: live for videos/cameras)")
     ap.add_argument("--every", type=int, default=1, help="mode all: process every n-th frame")

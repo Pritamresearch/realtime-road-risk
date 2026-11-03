@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Pritam Chakraborty <pritam.23.research@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """GPU model wrappers: SegFormer-B2 (Cityscapes, 19 classes) and Depth Anything 3 Metric-Large.
 
 Both take an RGB uint8 frame and return maps at the depth resolution, so every downstream step works on one grid.
@@ -144,7 +146,7 @@ class Detector:
         self.model, self.conf = YOLO(str(weights)), conf
 
     def __call__(self, bgr: np.ndarray, grid_hw: tuple[int, int]):
-        """(label map, COCO classes, confidences, boxes as fractions xyxy); the frame is seen at 640 px on its long side, as in v1."""
+        """(label map, COCO classes, confidences, boxes as fractions xyxy); the frame is seen at 640 px on its long side."""
         import cv2
 
         s = 640 / max(bgr.shape[:2])

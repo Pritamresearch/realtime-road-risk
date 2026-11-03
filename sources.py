@@ -1,7 +1,9 @@
+# Copyright (C) 2026 Pritam Chakraborty <pritam.23.research@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Frame sources: video files (rotation metadata applied), webcams, image folders and BDD-OIA.
 
-Each yields Frame objects with an optional eval-only reference: the human "must attend to" boxes of the own clips (v1 annotations,
-1-based video frame numbers) or the BDD-OIA action label. References are drawn and logged, never used by the risk rule.
+Each yields Frame objects with an optional eval-only reference: the human "must attend to" boxes of the annotated clips
+(datasets.py, 1-based video frame numbers) or the BDD-OIA action label. References are drawn and logged, never used by the risk rule.
 """
 from __future__ import annotations
 
@@ -15,7 +17,8 @@ from typing import Iterator
 import cv2
 import numpy as np
 
-V1 = Path(__file__).resolve().parent.parent / "v1"
+import datasets
+
 ROTATIONS = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp"}
 
@@ -45,28 +48,15 @@ class Source:
         raise NotImplementedError
 
 
-def _own_clip_refs(video: Path) -> dict[int, Reference]:
-    """Annotator boxes for a video under v1/real data, keyed by frame number; {} when the video is not an annotated clip."""
+def _clip_refs(video: Path) -> dict[int, Reference]:
+    """Annotator boxes for an annotated evaluation clip, keyed by frame number; {} for any other video."""
     try:
-        sys.path.insert(0, str(V1))
-        from datasets import own_clips
-    except Exception:
+        clip = datasets.clip_for_video(video)
+    except FileNotFoundError:  # no eval_clips.yaml
         return {}
-    finally:
-        sys.path.pop(0)
-    clip = next((c for c, rel in own_clips.VIDEOS.items() if (V1 / "real data" / rel).resolve() == video.resolve()), None)
-    if clip is None:
+    if clip is None or not (datasets.ANNOTATIONS / f"{clip}.csv").exists():
         return {}
-    root = Path.cwd()
-    try:
-        import os
-
-        os.chdir(V1)  # the loader uses paths relative to v1
-        frames = [f for f in own_clips.load_annotations() if f.clip == clip]
-        pw, ph = own_clips.clip_proc_size(clip)
-    finally:
-        os.chdir(root)
-    return {f.frame: Reference("annotator", [(b[0] / pw, b[1] / ph, b[2] / pw, b[3] / ph) for b in f.boxes]) for f in frames}
+    return {frame: Reference("annotator", boxes) for frame, boxes in datasets.clip_annotations(clip).items()}
 
 
 class VideoSource(Source):
@@ -80,7 +70,7 @@ class VideoSource(Source):
         self.total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or None
         cap.release()
         self.live = False
-        self.refs = _own_clip_refs(self.path)
+        self.refs = _clip_refs(self.path)
         self.annotated_only, self.every = annotated_only, every
 
     def frames(self) -> Iterator[Frame]:
@@ -141,12 +131,7 @@ class BddOiaSource(Source):
     """BDD-OIA last frames of one split, with the stop/slow-down vs forward label as reference."""
 
     def __init__(self, split: str = "val", n: int | None = 200, seed: int = 0):
-        sys.path.insert(0, str(V1))
-        try:
-            from datasets.bdd_oia import ROOT, iter_frames
-        finally:
-            sys.path.pop(0)
-        frames = list(iter_frames(V1 / ROOT, splits=[split]))
+        frames = list(datasets.bdd_oia_frames(split))
         if n is not None and n < len(frames):
             rng = np.random.default_rng(seed)
             frames = [frames[i] for i in sorted(rng.choice(len(frames), size=n, replace=False))]
@@ -155,9 +140,8 @@ class BddOiaSource(Source):
 
     def frames(self) -> Iterator[Frame]:
         for i, f in enumerate(self.items, 1):
-            path = f.image_path if f.image_path.is_absolute() else V1 / f.image_path
             acts = [n for n, a in zip(("forward", "stop/slow", "left", "right"), f.actions) if a]
-            yield Frame(i, cv2.imread(str(path)), Reference("bdd_oia", [], "+".join(acts) or "none"))
+            yield Frame(i, cv2.imread(str(f.image_path)), Reference("bdd_oia", [], "+".join(acts) or "none"))
 
 
 class LatestFrame:
@@ -199,15 +183,15 @@ class LatestFrame:
 
 
 def open_source(spec: str, annotated_only: bool = False, every: int = 1, n: int | None = 200) -> Source:
-    """spec: a video file, an image file, an image folder, a camera index ("0"), "bdd_oia[:split]", or a bare name looked up
-    in v1/real data (development layout only)."""
+    """spec: a video file, an image file, an image folder, a camera index ("0"), "bdd_oia[:split]", or part of a file name
+    looked up in data/videos/."""
     if spec.isdigit():
         return CameraSource(int(spec))
     if spec.startswith("bdd_oia"):
         return BddOiaSource(spec.partition(":")[2] or "val", n)
     p = Path(spec)
     if not p.exists():
-        root = V1 / "real data"
+        root = datasets.VIDEOS
         hits = [q for q in root.rglob("*") if q.is_file() and spec.lower() in q.name.lower()] if root.exists() else []
         if not hits:
             raise FileNotFoundError(spec)

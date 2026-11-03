@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Pritam Chakraborty <pritam.23.research@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Download the three model checkpoints into weights/ (about 1.5 GB in total).
 
     python download_weights.py

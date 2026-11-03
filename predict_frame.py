@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Pritam Chakraborty <pritam.23.research@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Run the pipeline on single frames: dashboard PNG + decision JSON per image.
 
     python predict_frame.py frame.jpg                         # -> out/frame_dashboard.png, out/frame.json
