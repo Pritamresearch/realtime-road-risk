@@ -97,7 +97,7 @@ Requirements: Python 3.10+ (tested on 3.12), an NVIDIA GPU with at least 6 GB (t
 It runs on CPU too, but far below real time.
 
 ```bash
-git clone https://github.com/<your-user>/realtime-road-risk.git
+git clone https://github.com/Pritamresearch/realtime-road-risk.git
 cd realtime-road-risk
 
 python -m venv .venv
