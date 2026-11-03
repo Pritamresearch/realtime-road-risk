@@ -1,0 +1,20 @@
+# Tested with Python 3.12, CUDA 12.1, Windows 11 (RTX 3050 6 GB Laptop GPU)
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1
+torchvision==0.20.1
+transformers>=4.57,<5          # 5.x rejects torch 2.5.1
+huggingface_hub<1
+safetensors
+ultralytics==8.4.198
+numpy
+opencv-python
+pillow
+pyyaml
+pandas
+matplotlib
+einops
+omegaconf
+# Depth Anything 3 is installed from source (see README, "Install"):
+#   git clone --depth 1 https://github.com/ByteDance-Seed/depth-anything-3 third_party/depth-anything-3
+#   pip install --no-deps -e third_party/depth-anything-3
+#   pip install addict moviepy==1.0.3 trimesh imageio plyfile pycolmap evo tqdm

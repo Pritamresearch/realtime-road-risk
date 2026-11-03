@@ -1,0 +1,21 @@
+# model checkpoints (python download_weights.py)
+weights/
+*.pt
+*.safetensors
+*.bin
+
+# caches, run outputs, local data
+cache/
+out/
+third_party/
+data/
+*.mp4
+*.mov
+*.avi
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/

@@ -1,0 +1,55 @@
+# Real-time road risk assessment: models, camera assumptions and risk rule.
+# Paths are relative to this folder.
+
+models:  # names inside weights/ (python download_weights.py)
+  segformer: segformer-b2-cityscapes                       # nvidia/segformer-b2-finetuned-cityscapes-1024-1024
+  segformer_short_side: 384                                # display panel only (source: yolo); short side, multiple of 32
+  depth: da3metric-large                                   # depth-anything/DA3METRIC-LARGE
+  yolo: yolo26s-seg.pt                                     # Ultralytics YOLO26s-seg
+  depth_process_res: 392                                   # DA3 upper-bound resize; 392 scored the same as 504 offline (out/eval_results.md)
+  # --hq uses these instead (~1.5x slower; scored the same offline)
+  hq: {segformer_short_side: 512, depth_process_res: 504}
+
+# Monocular metric depth needs the focal length in pixels: depth_m = f_px * net_output / 300.
+# Without calibration, f_px is derived from an assumed horizontal field of view. Distances scale linearly with f_px,
+# so a 10% FOV error is roughly a 10% distance error. Override per video (matched on the file stem) when known.
+camera:
+  default: {hfov_deg: 65.0, horizon: 0.50, height_m: 1.5}   # landscape dash cam (BDD100K: fx ~1000 px at 1280 wide -> ~65 deg)
+  portrait: {hfov_deg: 45.0, horizon: 0.50, height_m: 1.3}  # phone held upright
+  # ego_mask: polygons [[x, y], ...] in fractions of the upright frame covering the recording vehicle (hood, A-pillar,
+  # dashboard). Obstacle pixels inside are ignored; without it, a pillar or hood reflection reads as an obstacle at 2-3 m.
+  per_source:
+    00a0f008-3c67908e:
+      hfov_deg: 65.0
+      horizon: 0.47
+      ego_mask:
+        - [[0.75, 0.0], [1.0, 0.0], [1.0, 0.74], [0.985, 0.67], [0.93, 0.46], [0.84, 0.21]]   # right A-pillar
+        - [[0.0, 0.78], [1.0, 0.76], [1.0, 1.0], [0.0, 1.0]]                                     # hood (incl. its reflections)
+    challenge_video: {hfov_deg: 60.0, horizon: 0.60}
+
+risk:
+  corridor_half_width_m: 2.0      # |X| <= this, X = (u - cx) * Z / f
+  max_range_m: 60.0
+  max_height_m: 3.0               # corridor is a 3D box: obstacle pixels more than this above the road are ignored (overhangs, cabin parts)
+  grounded_tolerance: 0.0         # an object counts only if its lowest pixel is below horizon + this fraction of image height
+  near_m: 14.0                    # NEAR < near_m <= MID < mid_m <= FAR
+  mid_m: 30.0
+  critical_m: 5.0                 # risk score = 1 at or below this distance, 0 at or beyond mid_m
+  quantile: 1                     # percentile of in-corridor obstacle depths used as "distance" (robust minimum)
+  min_px: 25                      # fewer in-corridor pixels than this in a zone = no obstacle in that zone
+  erode: 1                        # 3x3 erosion iterations on obstacle masks (drops depth-bleeding edge pixels)
+  min_seg_conf: 0.6               # segmentation pixels below this softmax probability are ignored (spurious blobs at frame edges)
+  min_object_px: 40               # smallest object mask (pixels on the depth grid)
+  # Object selection, chosen by leave-one-clip-out on the 242 annotated frames (eval_grid.yaml, evaluate.py; picked in 6 of 8 folds)
+  source: yolo                    # obstacle candidates: yolo (YOLO26s-seg instances) | seg (SegFormer components)
+  yolo_conf: 0.25
+  class_weights: {person: 1.3, car: 1.2, truck: 1.2, bicycle: 1.1, motorcycle: 1.1, rider: 1.1, bus: 1.0, cat: 0.5, dog: 0.5}
+  rule: field                     # field: argmax w * exp(-d / lambda) * exp(-gap^2 / 2 sigma^2); corridor: nearest in-corridor object
+  field_lambda_m: 20.0
+  field_sigma_m: 3.0              # gap = lateral distance of the object outside the corridor
+  dist_q: 50                      # object distance = median depth of its (eroded) mask
+
+display:
+  width: 1600
+  height: 900
+  history: 60
